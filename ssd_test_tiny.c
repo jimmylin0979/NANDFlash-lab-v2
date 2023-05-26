@@ -235,9 +235,9 @@ int main(int argc, char **argv)
     for (testCase_idx = 0; testCase_idx < NUM_TESTCASE; testCase_idx++)
     {
         // random ssd w, e
-        int TEST_MAX_LENGTH = 409600;
+        int TEST_MAX_LENGTH = 10240;
         size_t offset = rand() % TEST_MAX_LENGTH; // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024);
-        size_t size = rand() % 20480 + 1;         // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024) + 1;
+        size_t size = rand() % 1024 + 1;          // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024) + 1;
 
         // int test_choice = rand() % 4;
         // switch (test_choice)

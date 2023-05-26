@@ -55,7 +55,7 @@ static int do_rw(FILE *fd, int is_read, size_t size, off_t offset)
     {
         for (idx = 0; idx < size; idx++)
         {
-            buf[idx] = idx;
+            buf[idx] = (idx % 78) + 48;
         }
         printf("dut do write size %ld, off %d\n", size, (int)offset);
         fseek(fd, offset, SEEK_SET);
