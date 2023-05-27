@@ -211,9 +211,9 @@ int main(int argc, char **argv)
         while ((c = fgetc(fptr)) != EOF)
         {
             simulated_nand[idx++] = (char)c;
-            printf("%c", c);
+            // printf("%c", c);
         }
-        printf("read %d chars from file\n", idx);
+        printf("\nread %d chars from file\n", idx);
         fclose(fptr);
     }
 
@@ -231,7 +231,8 @@ int main(int argc, char **argv)
     path = argv[1];
 
     char cmd;
-    int NUM_TESTCASE = 10000;
+    int NUM_TESTCASE = atoi(argv[2]);
+    printf("NUM_TESTCASE : %d\n", NUM_TESTCASE);
     for (testCase_idx = 0; testCase_idx < NUM_TESTCASE; testCase_idx++)
     {
         // random ssd w, e
@@ -265,11 +266,11 @@ int main(int argc, char **argv)
 
         if (offset + size > TEST_MAX_OFFSET)
         {
-            size = TEST_MAX_OFFSET - offset - 1;
+            size = TEST_MAX_OFFSET - offset;
         }
 
         // TODO
-        int cmd_choice = rand() % 1 + 1;
+        int cmd_choice = rand() % 2 + 1;
         switch (cmd_choice)
         {
         case 0:
@@ -300,14 +301,17 @@ int main(int argc, char **argv)
                 if (simulated_nand[idx] != tmp_buf[idx])
                 {
                     res = 1;
+                    printf("\033[0;31m");
+                    printf("[FAIL] %02dth, mismatch at lba %d\n", testCase_idx, idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+                    printf("\033[0m\n");
                     break;
                 }
             }
 
-            printf("Ground truth:\n");
-            for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
-                printf("%c", simulated_nand[idx]);
-            printf("\n");
+            // printf("Ground truth:\n");
+            // for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
+            //     printf("%c", simulated_nand[idx]);
+            // printf("\n");
 
             //
             if (res == 1)
@@ -315,6 +319,12 @@ int main(int argc, char **argv)
                 printf("\033[0;31m");
                 printf("[FAIL] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
                 printf("\033[0m\n");
+
+                printf("Ground truth:\n");
+                for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
+                    printf("%c", simulated_nand[idx]);
+                printf("\n");
+
                 printf("Ours:\n");
                 for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
                     printf("%c", tmp_buf[idx]);

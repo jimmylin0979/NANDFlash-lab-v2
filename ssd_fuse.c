@@ -190,18 +190,22 @@ void ftl_write_log()
 
     /*** store the WAF related data structures into log ***/
     // unsigned int is 2 ~ 4 bytes in c, suppose it is 2 bytes here
-    sprintf(tmp_buf + log_size, "%c", physic_size / 256);
-    sprintf(tmp_buf + log_size + 1, "%c", physic_size % 256);
-    log_size += 2;
-    sprintf(tmp_buf + log_size, "%c", logic_size / 256);
-    sprintf(tmp_buf + log_size + 1, "%c", logic_size % 256);
-    log_size += 2;
-    sprintf(tmp_buf + log_size, "%c", host_write_size / 256);
-    sprintf(tmp_buf + log_size + 1, "%c", host_write_size % 256);
-    log_size += 2;
-    sprintf(tmp_buf + log_size, "%c", nand_write_size / 256);
-    sprintf(tmp_buf + log_size + 1, "%c", nand_write_size % 256);
-    log_size += 2;
+    sprintf(tmp_buf + log_size, "%c", physic_size / 65536);
+    sprintf(tmp_buf + log_size + 1, "%c", physic_size / 256);
+    sprintf(tmp_buf + log_size + 2, "%c", physic_size % 256);
+    log_size += 3;
+    sprintf(tmp_buf + log_size, "%c", logic_size / 65536);
+    sprintf(tmp_buf + log_size + 1, "%c", logic_size / 256);
+    sprintf(tmp_buf + log_size + 2, "%c", logic_size % 256);
+    log_size += 3;
+    sprintf(tmp_buf + log_size, "%c", host_write_size / 65536);
+    sprintf(tmp_buf + log_size + 1, "%c", host_write_size / 256);
+    sprintf(tmp_buf + log_size + 2, "%c", host_write_size % 256);
+    log_size += 3;
+    sprintf(tmp_buf + log_size, "%c", nand_write_size / 65536);
+    sprintf(tmp_buf + log_size + 1, "%c", nand_write_size / 256);
+    sprintf(tmp_buf + log_size + 2, "%c", nand_write_size % 256);
+    log_size += 3;
     DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 3  WAF data structures complete, log_size %d\n", log_size));
 
     /*** Store the erasedSlot into the log ***/
@@ -324,24 +328,24 @@ int ftl_restore(unsigned int *unusedBlock)
     for (idx = 0; idx < 50; idx++)
     {
         ERC[idx] = log_buf[50 + idx];
-        DEBUG_PRINT(("[DEBUG] ftl_restore, restore ERC table %d-th, with value %d\n", idx, ERC[idx]));
+        DEBUG_PRINT(("[DEBUG] ftl_restore, restore ERC [%2d] = %d\n", idx, ERC[idx]));
     }
 
     /*** Restore WAF ***/
     // Restore physical size, host_size, etc.
-    for (idx = 0; idx < 2 * 4; idx += 2)
+    for (idx = 0; idx < 3 * 4; idx += 3)
     {
         //
         size_t size = 0;
-        size = log_buf[100 + idx] * 256 + log_buf[100 + idx + 1];
-        DEBUG_PRINT(("[DEBUG] ftl_restore, restore WAF table %d-th, with value %u\n", idx / 2, size));
+        size = log_buf[100 + idx] * 65536 + log_buf[100 + idx + 1] * 256 + log_buf[100 + idx + 2];
+        DEBUG_PRINT(("[DEBUG] ftl_restore, restore WAF [%2d] = %u\n", idx / 3, size));
         if (idx == 0)
             physic_size = size;
-        else if (idx / 2 == 1)
+        else if (idx / 3 == 1)
             logic_size = size;
-        else if (idx / 2 == 2)
+        else if (idx / 3 == 2)
             host_write_size = size;
-        else if (idx / 2 == 3)
+        else if (idx / 3 == 3)
             nand_write_size = size;
     }
 
@@ -349,14 +353,14 @@ int ftl_restore(unsigned int *unusedBlock)
     int value = -1, slot = -1;
     for (idx = 0; idx < 100; idx++)
     {
-        value = log_buf[108 + idx];
+        value = log_buf[112 + idx];
         for (i = 0; i < 8; i++)
         {
             slot = (idx + 1) * 8 - i - 1;
             erasedSlot[slot] = value % 2;
             if (erasedSlot[slot] == 1)
             {
-                DEBUG_PRINT(("[DEBUG] ftl_restore, restore erasedSlot table %d-th, with value %d\n", slot, erasedSlot[slot]));
+                DEBUG_PRINT(("[DEBUG] ftl_restore, restore erasedSlot [%2d] = %d\n", slot, erasedSlot[slot]));
 
                 // erasedSlot is 1, set the L2P[slot] to INVALID_PCA, and IVC[slot] increase by 1
                 PCA_RULE my_pca;
@@ -758,7 +762,7 @@ static int ftl_read(char *buf, size_t lba)
     // get pca from L2P table
     unsigned int pca = L2P[lba];
     // TODO uncomment for better understanding
-    // DEBUG_PRINT(("[DEBUG] ftl_read from LBA %ld -> PCA %u\n", lba, pca));
+    DEBUG_PRINT(("[DEBUG] ftl_read from LBA %ld -> PCA %u\n", lba, pca));
 
     // return 0 if that slot did not have any data there
     if (pca == INVALID_PCA)
@@ -989,7 +993,7 @@ static int ssd_do_read(char *buf, size_t size, off_t offset)
     // divide read cmd into 512B package by size
     tmp_lba = offset / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
     tmp_lba_range = (offset + size - 1) / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE - (tmp_lba) + 1;
-    DEBUG_PRINT(("[DEBUG] ssd_do_write, with size %ld, offset %ld ==> LBA from %d -> %d\n", size, offset, tmp_lba, tmp_lba_range + tmp_lba - 1));
+    DEBUG_PRINT(("[DEBUG] ssd_do_read, with size %ld, offset %ld ==> LBA from %d -> %d\n", size, offset, tmp_lba, tmp_lba_range + tmp_lba - 1));
 
     tmp_buf = calloc(tmp_lba_range * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
 
@@ -1328,6 +1332,15 @@ static int ssd_ioctl(const char *path, unsigned int cmd, void *arg, struct fuse_
         ssd_do_flush();
         printf(" --> do flush\n");
         return 0;
+    case SSD_SHOW_L2P:
+    {
+        int idx = 0;
+        for (idx = 0; idx < LBA_NUM; idx++)
+        {
+            printf("L2P[%3d] = %u\n", idx, L2P[idx]);
+        }
+        return 0;
+    }
     }
     return -EINVAL;
 }

@@ -201,6 +201,21 @@ int main(int argc, char **argv)
         close(fd);
         printf("flush done\n");
         return 0;
+    case 's':
+        printf("show L2P\n");
+        fd = open(path, O_RDWR);
+        if (fd < 0)
+        {
+            perror("open");
+            return 1;
+        }
+        if (ioctl(fd, SSD_SHOW_L2P))
+        {
+            perror("ioctl");
+        }
+        close(fd);
+        printf("show L2P done\n");
+        return 0;
     }
 usage:
     fprintf(stderr, "%s", usage);

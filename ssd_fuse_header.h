@@ -38,4 +38,5 @@ enum
   SSD_GET_WA          = _IOR('E', 2, size_t),
   SSD_LOGIC_ERASE     = _IOW('E', 3, size_t),
   SSD_FLUSH           = _IO('E', 4),
+  SSD_SHOW_L2P        = _IO('E', 5),
 };
