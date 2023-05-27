@@ -86,7 +86,7 @@ int flag_updateLog = 0;
 // -------------------------------------------------------------- //
 // temp
 // an array to help re-construct the linked list of clean blocks
-unsigned int *unusedBlock;
+// unsigned int *unusedBlock;
 
 // -------------------------------------------------------------- //
 
@@ -101,6 +101,7 @@ ssd_resize(size_t new_size)
     else
     {
         logic_size = new_size;
+        flag_updateLog = 1;
         return 0;
     }
 }
@@ -135,7 +136,7 @@ void nand_write_log(char *logBuf, int size)
 
 void ftl_do_copyback()
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] ftl_do_copyback start\n"));
 
     // TODO
@@ -144,31 +145,91 @@ void ftl_do_copyback()
     /*** update log ***/
 
     DEBUG_PRINT(("[DEBUG] ftl_do_copyback end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
 }
 
 void ftl_write_log()
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
-    DEBUG_PRINT(("[DEBUG] ftl_write_log start\n"));
 
     // only write log when the update flag is toggled
-    if (flag_updateLog == 1)
+    // if (flag_updateLog == 0)
+    // {
+    //     DEBUG_PRINT(("[DEBUG] ftl_write_log end\n"));
+    //
+    //     return;
+    // }
+    DEBUG_PRINT(("[DEBUG] ftl_write_log start\n"));
+
+    int MAX_LOG_SIZE = 512;
+    unsigned char *tmp_buf = malloc(MAX_LOG_SIZE * sizeof(unsigned char));
+    memset(tmp_buf, 255, sizeof(unsigned char) * MAX_LOG_SIZE);
+    int log_size = 0;
+
+    /*** Store the block order into log ***/
+    Node *curr_node = ll_head_blockWriteOrder;
+    int idx = 0, i = 0;
+    while (curr_node)
     {
-        // TODO
-        // nand_write_log(/*your log*/, /*your log size*/);
+        char c = curr_node->block;
+        // // BUG Even though curr_node->block is 1, the program still write 0 into log
+        // Use snprintf carefully, especially care for the size_t n
+        // snprintf(tmp_buf + log_size, 1, "%c", c % 256);
+        tmp_buf[log_size] = c % 256;
+        curr_node = curr_node->next;
+        log_size += 1;
     }
+    log_size = 50;
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 1 block order complete, log_size %d\n", log_size));
+
+    /*** Store the ERC into log ***/
+    for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
+    {
+        sprintf(tmp_buf + log_size, "%c", ERC[idx]);
+        log_size += 1;
+    }
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 2 ERC table complete, log_size %d\n", log_size));
+
+    /*** store the WAF related data structures into log ***/
+    // unsigned int is 2 ~ 4 bytes in c, suppose it is 2 bytes here
+    sprintf(tmp_buf + log_size, "%c", physic_size / 256);
+    sprintf(tmp_buf + log_size + 1, "%c", physic_size % 256);
+    log_size += 2;
+    sprintf(tmp_buf + log_size, "%c", logic_size / 256);
+    sprintf(tmp_buf + log_size + 1, "%c", logic_size % 256);
+    log_size += 2;
+    sprintf(tmp_buf + log_size, "%c", host_write_size / 256);
+    sprintf(tmp_buf + log_size + 1, "%c", host_write_size % 256);
+    log_size += 2;
+    sprintf(tmp_buf + log_size, "%c", nand_write_size / 256);
+    sprintf(tmp_buf + log_size + 1, "%c", nand_write_size % 256);
+    log_size += 2;
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 3  WAF data structures complete, log_size %d\n", log_size));
+
+    /*** Store the erasedSlot into the log ***/
+    int value = 0;
+    for (idx = 0; idx < LBA_NUM; idx += 8)
+    {
+        value = 0;
+        for (i = 0; i < 8; i++)
+            value = value * 2 + erasedSlot[idx + i];
+        sprintf(tmp_buf + log_size, "%c", value % 256);
+        log_size += 1;
+    }
+
+    /*** Write log ***/
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 4  call nand_write_log\n"));
+    nand_write_log(tmp_buf, MAX_LOG_SIZE);
+    free(tmp_buf);
 
     // reset flags
     flag_updateLog = 0;
 
     DEBUG_PRINT(("[DEBUG] ftl_write_log end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
 }
 
-int ftl_restore()
+size_t spare_read(unsigned int pca);
+int ftl_restore(unsigned int *unusedBlock)
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] ftl_restore start\n"));
 
     // call nand_read_log() to read the log
@@ -177,12 +238,139 @@ int ftl_restore()
     if (log_size == 0)
     {
         DEBUG_PRINT(("[DEBUG] ftl_restore, no log ...\n"));
-        DEBUG_PRINT(("-----------------------------------------------------\n"));
+        DEBUG_PRINT(("[DEBUG] ftl_restore end\n"));
+
         return 0;
     }
 
+    /*** Restore IVC, L2P ***/
+    // we should first restore ll_blockWriteOrder, which will then be used to recover L2P, IVC table
+    // log_buf[0: 51] stored the value the block order
+    int idx = 0, i = 0;
+    Node *prev_node = NULL; // = (Node *)malloc(sizeof(Node)); // initialize a dummy node first
+    for (idx = 0; idx < 50; idx++)
+    {
+        int block = log_buf[idx];
+        if (block == 255)
+            break;
+        // DEBUG_PRINT(("[DEBUG] ftl_restore, restore ll_blockWriteOrder %d-th, with block %d\n", idx, block));
+
+        Node *new_node = (Node *)malloc(sizeof(Node));
+        new_node->block = block;
+        new_node->next = NULL;
+
+        if (prev_node == NULL)
+        {
+            ll_head_blockWriteOrder = new_node;
+            prev_node = new_node;
+        }
+        else
+        {
+            prev_node->next = new_node;
+            prev_node = prev_node->next;
+        }
+    }
+    print_linkedList(ll_head_blockWriteOrder);
+
+    // next, we read the spare data from nand, and recover it to L2P in the order described by ll_blockOrder
+    //  at the same time, we can recover IVC table by checking whether L2P slot is overwritten
+    Node *curr_node = ll_head_blockWriteOrder;
+    int *prev_block = (int *)malloc(sizeof(int) * LBA_NUM);
+    memset(prev_block, -1, sizeof(int) * LBA_NUM);
+    while (curr_node)
+    {
+        // read the spare data of all pages at current block
+        int page = 0;
+        for (page = 0; page < LBA_NUM_PER_BLOCK; page++)
+        {
+            // Read from the spare data from the page of the block to get lba
+            PCA_RULE my_pca;
+            my_pca.fields.block = curr_node->block;
+            my_pca.fields.page = page;
+            size_t lba = spare_read(my_pca.pca);
+
+            // check the last inserted block, if it not full, then we should restore the curr_pca to the last page on it
+            if (curr_node->next == NULL && lba == LBA_NUM)
+            {
+                curr_pca.fields.block = curr_node->block;
+                curr_pca.fields.page = page - 1;
+                if (curr_pca.fields.page < 0)
+                {
+                    curr_pca.pca = INVALID_PCA;
+                }
+                break;
+            }
+
+            //
+            unusedBlock[curr_node->block] = 0;
+            // DEBUG_PRINT(("[DEBUG] ftl_restore, set unusedBlock[%d] to 0\n", curr_node->block));
+
+            // if lba is already occupied, it means that there exist a invalid slot in the previous block
+            if (L2P[lba] != INVALID_PCA)
+            {
+                IVC[prev_block[lba]] += 1;
+            }
+            prev_block[lba] = curr_node->block;
+
+            // update the pca on L2P table
+            L2P[lba] = my_pca.pca;
+        }
+
+        curr_node = curr_node->next;
+    }
+
+    /*** Restore ERC ***/
+    // log_buf[50: 101] stored the value the ERC table
+    for (idx = 0; idx < 50; idx++)
+    {
+        ERC[idx] = log_buf[50 + idx];
+        DEBUG_PRINT(("[DEBUG] ftl_restore, restore ERC table %d-th, with value %d\n", idx, ERC[idx]));
+    }
+
+    /*** Restore WAF ***/
+    // Restore physical size, host_size, etc.
+    for (idx = 0; idx < 2 * 4; idx += 2)
+    {
+        //
+        size_t size = 0;
+        size = log_buf[100 + idx] * 256 + log_buf[100 + idx + 1];
+        DEBUG_PRINT(("[DEBUG] ftl_restore, restore WAF table %d-th, with value %u\n", idx / 2, size));
+        if (idx == 0)
+            physic_size = size;
+        else if (idx / 2 == 1)
+            logic_size = size;
+        else if (idx / 2 == 2)
+            host_write_size = size;
+        else if (idx / 2 == 3)
+            nand_write_size = size;
+    }
+
+    /*** Restore erasedSlot, and L2P ***/
+    int value = -1, slot = -1;
+    for (idx = 0; idx < 100; idx++)
+    {
+        value = log_buf[108 + idx];
+        for (i = 0; i < 8; i++)
+        {
+            slot = (idx + 1) * 8 - i - 1;
+            erasedSlot[slot] = value % 2;
+            if (erasedSlot[slot] == 1)
+            {
+                DEBUG_PRINT(("[DEBUG] ftl_restore, restore erasedSlot table %d-th, with value %d\n", slot, erasedSlot[slot]));
+
+                // erasedSlot is 1, set the L2P[slot] to INVALID_PCA, and IVC[slot] increase by 1
+                PCA_RULE my_pca;
+                my_pca.pca = L2P[slot];
+                IVC[my_pca.fields.block] += 1;
+                L2P[slot] = INVALID_PCA;
+            }
+            value = value / 2;
+        }
+    }
+
     DEBUG_PRINT(("[DEBUG] ftl_restore end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
+    return 1;
 }
 
 int nand_read_log(char *logBuf, int size) // logBuf is output
@@ -232,6 +420,41 @@ static int nand_read(char *data_buf, char *spare_buf, int pca)
     }
     free(tmp_spare);
     return PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
+}
+
+size_t spare_read(unsigned int pca)
+{
+    /*** Giving PCA, return LBA stored in its spare data ***/
+    // DEBUG_PRINT(("[DEBUG] spare_read(pca) from pca %u \n", pca));
+
+    // return 0 if that slot did not have any data there
+    if (pca == INVALID_PCA)
+    {
+        return 0;
+    }
+
+    // Allocate space for spare buffer
+    char *buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
+    unsigned char *spare_buf = calloc(PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE, sizeof(char));
+
+    // Call nand_read and store value inside the buffers (spare_buf)
+    int rst = nand_read(buf, spare_buf, pca);
+    if (rst == -EINVAL)
+    {
+        return -EINVAL;
+    }
+
+    // Handle when the block is not written full
+    size_t is_exist_spare_data = spare_buf[0];
+    if (is_exist_spare_data != 1)
+    {
+        // return LBA_NUM when the spare data is not exist
+        return LBA_NUM;
+    }
+
+    size_t lba = spare_buf[1] * 256 + spare_buf[2];
+    // DEBUG_PRINT(("[DEBUG] spare_read(pca) get lba =  %ld \n", lba));
+    return lba;
 }
 
 static int nand_write(const char *data_buf, const char *spare_buf, int pca) // spare can use NULL
@@ -329,13 +552,13 @@ Node *append_node_to_linkedList(Node *head, int block)
 void print_linkedList(Node *head)
 {
     //
-    Node *curr_block = head;
+    Node *curr_node = head;
     DEBUG_PRINT(("linkedList : "));
-    while (curr_block != NULL)
+    while (curr_node != NULL)
     {
-        DEBUG_PRINT(("%d -> ", curr_block->block));
+        DEBUG_PRINT(("%d -> ", curr_node->block));
         // forward to next node
-        curr_block = curr_block->next;
+        curr_node = curr_node->next;
     }
     DEBUG_PRINT(("\n"));
 }
@@ -382,7 +605,8 @@ static int nand_erase(int nand)
     /*** FTL-maintain ***/
     /*** update linked list ***/
     ll_head_blockWriteOrder = delete_node_from_linkedList(ll_head_blockWriteOrder, nand);
-    ll_head_unusedBlock = append_node_to_linkedList(ll_head_unusedBlock, nand);
+    // ll_head_unusedBlock = delete_node_from_linkedList(ll_head_unusedBlock, nand);
+    // ll_head_unusedBlock = append_node_to_linkedList(ll_head_unusedBlock, nand);
 
     /*** update table ***/
     ERC[nand]++;
@@ -397,14 +621,16 @@ static int nand_erase(int nand)
 
 static unsigned int get_next_pca()
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] get_next_pca start\n"));
 
     if (curr_pca.pca == INVALID_PCA)
     {
         // init
-        print_linkedList(ll_head_unusedBlock);
         DEBUG_PRINT(("[DEBUG] get_next_pca, forward to a new block %d\n", ll_head_unusedBlock->block));
+        int rst = nand_erase(ll_head_unusedBlock->block);
+        if (rst == -EINVAL)
+            return -EINVAL;
         curr_pca.fields.block = ll_head_unusedBlock->block;
         curr_pca.fields.page = 0;
         printf("PCA = lba %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
@@ -414,6 +640,8 @@ static unsigned int get_next_pca()
         Node *tmp = ll_head_unusedBlock;
         ll_head_unusedBlock = ll_head_unusedBlock->next;
         free(tmp);
+        DEBUG_PRINT(("[DEBUG] get_next_pca, update the unusedBlock\n"));
+        print_linkedList(ll_head_unusedBlock);
 
         // and blockWriteOrder should be updated
         ll_head_blockWriteOrder = delete_node_from_linkedList(ll_head_blockWriteOrder, curr_pca.fields.block);
@@ -442,8 +670,10 @@ static unsigned int get_next_pca()
         else
         {
             /*** update curr_pca ***/
-            print_linkedList(ll_head_unusedBlock);
             DEBUG_PRINT(("[DEBUG] get_next_pca, forward to a new block %d\n", ll_head_unusedBlock->block));
+            int rst = nand_erase(ll_head_unusedBlock->block);
+            if (rst == -EINVAL)
+                return -EINVAL;
             curr_pca.fields.block = ll_head_unusedBlock->block;
             curr_pca.fields.page = 0;
             printf("PCA = lba %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
@@ -453,6 +683,8 @@ static unsigned int get_next_pca()
             Node *tmp = ll_head_unusedBlock;
             ll_head_unusedBlock = ll_head_unusedBlock->next;
             free(tmp);
+            DEBUG_PRINT(("[DEBUG] get_next_pca, update the unusedBlock\n"));
+            print_linkedList(ll_head_unusedBlock);
 
             // and blockWriteOrder should be updated
             ll_head_blockWriteOrder = delete_node_from_linkedList(ll_head_blockWriteOrder, curr_pca.fields.block);
@@ -472,14 +704,12 @@ static unsigned int get_next_pca()
         printf("PCA = lba %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
     }
 
-    DEBUG_PRINT(("[DEBUG] get_next_pca end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
     return curr_pca.pca;
 }
 
 static int cache_read(char *data_buf, int write_buffer_lba)
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] cache_read start\n"));
 
     // TODO
@@ -488,13 +718,13 @@ static int cache_read(char *data_buf, int write_buffer_lba)
     /*** update log ***/
 
     DEBUG_PRINT(("[DEBUG] cache_read end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     return 0;
 }
 
 static int cache_write(const char *data, size_t logic_lba)
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] cache_write start\n"));
 
     // TODO
@@ -503,13 +733,13 @@ static int cache_write(const char *data, size_t logic_lba)
     /*** update log ***/
 
     DEBUG_PRINT(("[DEBUG] cache_write end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     return 0;
 }
 
 static int ftl_flush()
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] ftl_flush start\n"));
 
     // TODO
@@ -518,18 +748,17 @@ static int ftl_flush()
     /*** update log ***/
 
     DEBUG_PRINT(("[DEBUG] ftl_flush end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     return 0;
 }
 
 static int ftl_read(char *buf, size_t lba)
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
-    DEBUG_PRINT(("[DEBUG] ftl_read start\n"));
 
     // get pca from L2P table
     unsigned int pca = L2P[lba];
-    DEBUG_PRINT(("[DEBUG] ftl_read from LBA %ld -> PCA %u\n", lba, pca));
+    // TODO uncomment for better understanding
+    // DEBUG_PRINT(("[DEBUG] ftl_read from LBA %ld -> PCA %u\n", lba, pca));
 
     // return 0 if that slot did not have any data there
     if (pca == INVALID_PCA)
@@ -544,15 +773,12 @@ static int ftl_read(char *buf, size_t lba)
     /*** update table ***/
     /*** update log ***/
 
-    DEBUG_PRINT(("[DEBUG] ftl_read end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
-
     return rst;
 }
 
 static int ftl_write(const char *buf, size_t lba_range, size_t lba)
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     DEBUG_PRINT(("[DEBUG] ftl_write start\n"));
 
     // get pca via calling get_next_pca()
@@ -564,11 +790,13 @@ static int ftl_write(const char *buf, size_t lba_range, size_t lba)
     memset(spare_buf, 0, PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE * sizeof(char));
     unsigned char state = 1;
     sprintf(spare_buf, "%c%c%c", state, lba / 256, lba % 256);
+    // sprintf(spare_buf, 3, "%c%c%c", state, lba / 256, lba % 256);
 
     // call nand_write to write the buffer to the NAND
     int rst = nand_write(buf, spare_buf, pca);
     if (rst == -EINVAL)
         return -EINVAL;
+    DEBUG_PRINT(("[DEBUG] ftl_write, nand_write success\n"));
 
     /*** update linked list ***/
     /*** update table ***/
@@ -589,37 +817,57 @@ static int ftl_write(const char *buf, size_t lba_range, size_t lba)
     /*** update log ***/
 
     DEBUG_PRINT(("[DEBUG] ftl_write end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     return rst;
 }
 
 static int ftl_gc()
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
-    DEBUG_PRINT(("[DEBUG] ftl_gc start\n"));
-
     /*** check whether need to do gc ***/
     int num_unusedBlock = get_num_of_linkedList(ll_head_unusedBlock);
     DEBUG_PRINT(("[DEBUG] num_unusedBlock is %d\n", num_unusedBlock));
-    print_linkedList(ll_head_unusedBlock);
+    // print_linkedList(ll_head_unusedBlock);
+
+    unsigned int *unusedBlock;
+    unusedBlock = malloc(PHYSICAL_NAND_NUM * sizeof(int));
+    // memset(unusedBlock, 0, sizeof(int) * PHYSICAL_NAND_NUM);
+    int idx = 0;
+    for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
+        unusedBlock[idx] = 0;
+
+    DEBUG_PRINT(("ll_head_unusedBlock : "));
+    Node *curr_node = ll_head_unusedBlock;
+    while (curr_node)
+    {
+        DEBUG_PRINT(("%d -> ", curr_node->block));
+        unusedBlock[curr_node->block] = 1;
+        curr_node = curr_node->next;
+    }
+    DEBUG_PRINT(("\n"));
+
     if (num_unusedBlock > 5)
     {
-        DEBUG_PRINT(("[DEBUG] ftl_gc end\n"));
-        DEBUG_PRINT(("-----------------------------------------------------\n"));
+        free(unusedBlock);
         return 0;
     }
 
+    DEBUG_PRINT(("[DEBUG] ftl_gc start\n"));
+
     /*** decide the source block to be erased ***/
-    int idx = 0;
     int idx_badBlock = -1, num_HighestIVC = 0;
     for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
     {
+        // DEBUG_PRINT(("[DEBUG] ftl_gc, unusedBlock[%2d] is %d\n", idx, unusedBlock[idx]));
+        if (unusedBlock[idx] == 1)
+            continue;
+        DEBUG_PRINT(("[DEBUG] ftl_gc, IVC[%2d] = %d\n", idx, IVC[idx]));
         if (IVC[idx] > num_HighestIVC)
         {
             num_HighestIVC = IVC[idx];
             idx_badBlock = idx;
         }
     }
+    free(unusedBlock);
     DEBUG_PRINT(("[DEBUG] ftl_gc, select %d as source block to erase, which IVC is %d\n", idx_badBlock, num_HighestIVC));
 
     /*** move all the valid data that in source block to another block ***/
@@ -662,13 +910,17 @@ static int ftl_gc()
     DEBUG_PRINT(("[DEBUG] ftl_gc, move all the valid data into new pca\n"));
 
     /*** erase the source block with invalid data ***/
-    rst = nand_erase(idx_badBlock);
-    if (rst == -EINVAL)
-        return -EINVAL;
+    // rst = nand_erase(idx_badBlock);
+    // if (rst == -EINVAL)
+    //     return -EINVAL;
+    ll_head_blockWriteOrder = delete_node_from_linkedList(ll_head_blockWriteOrder, idx_badBlock);
+    ll_head_unusedBlock = delete_node_from_linkedList(ll_head_unusedBlock, idx_badBlock);
+    ll_head_unusedBlock = append_node_to_linkedList(ll_head_unusedBlock, idx_badBlock);
     DEBUG_PRINT(("[DEBUG] ftl_gc, erase block success\n"));
 
+    flag_updateLog = 1;
+
     DEBUG_PRINT(("[DEBUG] ftl_gc end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
     return 0;
 }
 
@@ -737,6 +989,8 @@ static int ssd_do_read(char *buf, size_t size, off_t offset)
     // divide read cmd into 512B package by size
     tmp_lba = offset / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
     tmp_lba_range = (offset + size - 1) / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE - (tmp_lba) + 1;
+    DEBUG_PRINT(("[DEBUG] ssd_do_write, with size %ld, offset %ld ==> LBA from %d -> %d\n", size, offset, tmp_lba, tmp_lba_range + tmp_lba - 1));
+
     tmp_buf = calloc(tmp_lba_range * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
 
     for (int i = 0; i < tmp_lba_range; i++)
@@ -872,7 +1126,6 @@ static int ssd_write(const char *path, const char *buf, size_t size, off_t offse
 
 static int ftl_erase(const char *buf, int lba)
 {
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
     DEBUG_PRINT(("[DEBUG] ftl_erase start\n"));
 
     // modify the lba mapping value in L2P table into INVALID_PCA, and update IVC table
@@ -904,7 +1157,7 @@ static int ftl_erase(const char *buf, int lba)
     }
 
     DEBUG_PRINT(("[DEBUG] ftl_erase end\n"));
-    DEBUG_PRINT(("-----------------------------------------------------\n"));
+
     return 0;
 }
 
@@ -937,6 +1190,7 @@ static int ssd_do_erase(int offset, int size)
         // handling non-aligned data
         // for non-aligned issue, read the whole page, erase the data, and move the remain data to a new page
         size_t lba = tmp_lba + idx;
+
         const char *tmp_buf = NULL;
         curr_offset = 0;
         if (idx == 0)
@@ -1117,11 +1371,12 @@ int main(int argc, char *argv[])
     memset(erasedSlot, 0, sizeof(int) * LBA_NUM);
 
     /*** Restore from log ***/
+    unsigned int *unusedBlock;
     unusedBlock = malloc(PHYSICAL_NAND_NUM * sizeof(int));
     // memset(unusedBlock, 0, sizeof(int) * PHYSICAL_NAND_NUM);
     for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
         unusedBlock[idx] = 1;
-    int is_exist_log = ftl_restore();
+    int is_exist_log = ftl_restore(unusedBlock);
 
     /*** Construct the linked list for clean blocks ***/
     DEBUG_PRINT(("[DEBUG] main, construct the ll_head_unusedBlock\n"));
@@ -1135,7 +1390,7 @@ int main(int argc, char *argv[])
             continue;
 
         // create a new node and append to the linked list
-        DEBUG_PRINT(("[DEBUG] main, build ll_head_unusedBlock with block %d\n", idx));
+        // DEBUG_PRINT(("[DEBUG] main, build ll_head_unusedBlock with block %d\n", idx));
         Node *new_node = (Node *)malloc(sizeof(Node));
         new_node->block = idx;
         new_node->next = NULL;
@@ -1151,6 +1406,7 @@ int main(int argc, char *argv[])
             prev_block = new_node;
         }
     }
+    print_linkedList(ll_head_unusedBlock);
     free(unusedBlock);
 
     // create nand file and log file

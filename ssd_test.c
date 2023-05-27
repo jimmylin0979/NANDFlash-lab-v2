@@ -211,9 +211,9 @@ int main(int argc, char **argv)
         while ((c = fgetc(fptr)) != EOF)
         {
             simulated_nand[idx++] = (char)c;
-            printf("%c", c);
+            // printf("%c", c);
         }
-        printf("read %d chars from file\n", idx);
+        printf("\nread %d chars from file\n", idx);
         fclose(fptr);
     }
 
@@ -235,9 +235,10 @@ int main(int argc, char **argv)
     for (testCase_idx = 0; testCase_idx < NUM_TESTCASE; testCase_idx++)
     {
         // random ssd w, e
-        int TEST_MAX_LENGTH = 409600;
-        size_t offset = rand() % TEST_MAX_LENGTH; // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024);
-        size_t size = rand() % 20480 + 1;         // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024) + 1;
+        int TEST_MAX_OFFSET = 409600;
+        int TEST_MAX_SIZE = 20480;
+        size_t offset = rand() % TEST_MAX_OFFSET; // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024);
+        size_t size = rand() % TEST_MAX_SIZE + 1; // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024) + 1;
 
         // int test_choice = rand() % 4;
         // switch (test_choice)
@@ -262,13 +263,13 @@ int main(int argc, char **argv)
         //     break;
         // }
 
-        if (offset + size > TEST_MAX_LENGTH)
+        if (offset + size > TEST_MAX_OFFSET)
         {
-            size = TEST_MAX_LENGTH - offset - 1;
+            size = TEST_MAX_OFFSET - offset - 1;
         }
 
         // TODO
-        int cmd_choice = rand() % 3;
+        int cmd_choice = rand() % 2 + 1;
         switch (cmd_choice)
         {
         case 0:
@@ -289,22 +290,24 @@ int main(int argc, char **argv)
         ssd_command(path, cmd, offset, size);
 
         // compare the result
-        if (cmd == 'r')
+        if (1)
         {
+            ssd_command(path, 'r', 0, TEST_MAX_OFFSET);
+
             int res = 0;
-            for (idx = 0; idx < size; idx++)
+            for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
             {
-                if (simulated_nand[offset + idx] != tmp_buf[idx])
+                if (simulated_nand[idx] != tmp_buf[idx])
                 {
                     res = 1;
                     break;
                 }
             }
 
-            printf("Ground truth:\n");
-            for (idx = 0; idx < size; idx++)
-                printf("%c", simulated_nand[offset + idx]);
-            printf("\n");
+            // printf("Ground truth:\n");
+            // for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
+            //     printf("%c", simulated_nand[idx]);
+            // printf("\n");
 
             //
             if (res == 1)
@@ -312,10 +315,10 @@ int main(int argc, char **argv)
                 printf("\033[0;31m");
                 printf("[FAIL] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
                 printf("\033[0m\n");
-                printf("Ours:\n");
-                for (idx = 0; idx < size; idx++)
-                    printf("%c", tmp_buf[idx]);
-                printf("\n");
+                // printf("Ours:\n");
+                // for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
+                //     printf("%c", tmp_buf[idx]);
+                // printf("\n");
                 break;
             }
             else
@@ -324,18 +327,18 @@ int main(int argc, char **argv)
                 printf("[PASS] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
                 printf("\033[0m\n");
             }
-        }
 
-        //
-        free(tmp_buf);
-        tmp_buf = NULL;
+            //
+            free(tmp_buf);
+            tmp_buf = NULL;
 
-        // write test log
-        FILE *fptr = fopen("test.log", "w");
-        for (idx = 0; idx < LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024; idx++)
-        {
-            fprintf(fptr, "%c", simulated_nand[idx]);
+            // write test log
+            FILE *fptr = fopen("test.log", "w");
+            for (idx = 0; idx < LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024; idx++)
+            {
+                fprintf(fptr, "%c", simulated_nand[idx]);
+            }
+            fclose(fptr);
         }
-        fclose(fptr);
     }
 }
