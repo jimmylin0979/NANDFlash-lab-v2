@@ -269,7 +269,6 @@ int main(int argc, char **argv)
             size = TEST_MAX_OFFSET - offset;
         }
 
-        // TODO
         int cmd_choice = rand() % 2 + 1;
         switch (cmd_choice)
         {
@@ -296,11 +295,13 @@ int main(int argc, char **argv)
             ssd_command(path, 'r', 0, TEST_MAX_OFFSET);
 
             int res = 0;
+            int bad_lba = -1;
             for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
             {
                 if (simulated_nand[idx] != tmp_buf[idx])
                 {
                     res = 1;
+                    bad_lba = idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
                     printf("\033[0;31m");
                     printf("[FAIL] %02dth, mismatch at lba %d\n", testCase_idx, idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
                     printf("\033[0m\n");
@@ -316,13 +317,13 @@ int main(int argc, char **argv)
                 printf("\033[0m\n");
 
                 printf("Ground truth:\n");
-                for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
-                    printf("%c", simulated_nand[idx]);
+                for (idx = 0; idx < PHYSICAL_DATA_SIZE_BYTES_PER_PAGE; idx++)
+                    printf("%c", simulated_nand[bad_lba * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + idx]);
                 printf("\n");
 
                 printf("Ours:\n");
-                for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
-                    printf("%c", tmp_buf[idx]);
+                for (idx = 0; idx < PHYSICAL_DATA_SIZE_BYTES_PER_PAGE; idx++)
+                    printf("%c", tmp_buf[bad_lba * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + idx]);
                 printf("\n");
                 break;
             }

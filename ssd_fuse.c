@@ -63,8 +63,8 @@ unsigned int *IVC; // invalid count of a block
 unsigned int *ERC; // erase count of a block
 int *erasedSlot;
 
-int write_buffer_index = 0;
-char write_buffer[PHYSICAL_DATA_SIZE_BYTES_PER_PAGE * WRITE_BUFFER_PAGE_NUM];
+// int write_buffer_index = 0;
+// char write_buffer[PHYSICAL_DATA_SIZE_BYTES_PER_PAGE * WRITE_BUFFER_PAGE_NUM];
 
 // A linked list that points blocks together
 typedef struct node Node;
@@ -74,11 +74,22 @@ struct node
     struct node *next;
 };
 
+typedef struct cacheEntry CacheEntry;
+struct cacheEntry
+{
+    size_t lba;                                   // logical block addressing
+    char data[PHYSICAL_DATA_SIZE_BYTES_PER_PAGE]; // data for this LBA
+    struct cacheEntry *next;                      // pointer to the next cache entry in the list
+    int erasedSlot;
+};
+
 /*** Linked List ***/
 Node *ll_head_unusedBlock = NULL;
 // Node *ll_rear_cleanBlock = NULL;
 
 Node *ll_head_blockWriteOrder = NULL; // the order in which block is written
+
+CacheEntry *ll_head_cache = NULL;
 
 /*** Flags ***/
 int flag_updateLog = 0;
@@ -149,8 +160,7 @@ void ftl_do_copyback()
 
 void ftl_write_log()
 {
-
-    // only write log when the update flag is toggled
+    // TODO only write log when the update flag is toggled
     // if (flag_updateLog == 0)
     // {
     //     DEBUG_PRINT(("[DEBUG] ftl_write_log end\n"));
@@ -170,7 +180,7 @@ void ftl_write_log()
     while (curr_node)
     {
         char c = curr_node->block;
-        // // BUG Even though curr_node->block is 1, the program still write 0 into log
+        // BUG Even though curr_node->block is 1, the program still write 0 into log
         // Use snprintf carefully, especially care for the size_t n
         // snprintf(tmp_buf + log_size, 1, "%c", c % 256);
         tmp_buf[log_size] = c % 256;
@@ -218,6 +228,8 @@ void ftl_write_log()
         sprintf(tmp_buf + log_size, "%c", value % 256);
         log_size += 1;
     }
+
+    // TODO store which block is SLC/MLC
 
     /*** Write log ***/
     DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 4  call nand_write_log\n"));
@@ -581,6 +593,54 @@ int get_num_of_linkedList(Node *head)
     return num;
 }
 
+CacheEntry *append_node_to_cache(CacheEntry *head, CacheEntry *new_node)
+{
+    //
+    if (!head)
+    {
+        head = new_node;
+        return head;
+    }
+
+    //
+    CacheEntry *prev_block = head;
+    while (prev_block->next != NULL)
+    {
+        // forward to next node
+        prev_block = prev_block->next;
+    }
+    prev_block->next = new_node;
+    return head;
+}
+
+void print_cache(CacheEntry *head)
+{
+    //
+    CacheEntry *curr_node = head;
+    DEBUG_PRINT(("linkedList : "));
+    while (curr_node != NULL)
+    {
+        DEBUG_PRINT(("%u -> ", curr_node->lba));
+        // forward to next node
+        curr_node = curr_node->next;
+    }
+    DEBUG_PRINT(("\n"));
+}
+
+int get_num_of_cache(CacheEntry *head)
+{
+    //
+    CacheEntry *curr_block = head;
+    int num = 0;
+    while (curr_block != NULL)
+    {
+        // forward to next node
+        curr_block = curr_block->next;
+        num++;
+    }
+    return num;
+}
+
 static int nand_erase(int nand)
 {
     char nand_name[100];
@@ -613,6 +673,7 @@ static int nand_erase(int nand)
     // ll_head_unusedBlock = append_node_to_linkedList(ll_head_unusedBlock, nand);
 
     /*** update table ***/
+    // TODO should we reset erasedSlot table during nand_erase
     ERC[nand]++;
     IVC[nand] = 0;
 
@@ -711,57 +772,150 @@ static unsigned int get_next_pca()
     return curr_pca.pca;
 }
 
-static int cache_read(char *data_buf, int write_buffer_lba)
+static CacheEntry *cache_read(char *data_buf, int logic_lba)
 {
+    // DEBUG_PRINT(("[DEBUG] cache_read start\n"));
+    // // 1 for data exist, 0 for no data (not in cache, or the latest data in cache is erased)
+    // 1 for lba exist in cache (including when erasedSlot = 1), 0 for no in cache
 
-    DEBUG_PRINT(("[DEBUG] cache_read start\n"));
+    //
+    CacheEntry *res = NULL;
+    CacheEntry *curr_node = ll_head_cache;
+    while (curr_node != NULL)
+    {
+        if (curr_node->lba == logic_lba)
+        {
+            if (curr_node->erasedSlot == 1)
+            {
+                // erased
+                DEBUG_PRINT(("[DEBUG] cache_read read lba %ld with erased\n", logic_lba));
+                memset(data_buf, 0, sizeof(char) * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+                res = curr_node;
+            }
+            else
+            {
+                DEBUG_PRINT(("[DEBUG] cache_read read lba %ld  \n", logic_lba));
+                memcpy(data_buf, curr_node->data, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+                res = curr_node;
+            }
+        }
+        curr_node = curr_node->next;
+    }
 
-    // TODO
-    /*** update linked list ***/
-    /*** update table ***/
-    /*** update log ***/
-
-    DEBUG_PRINT(("[DEBUG] cache_read end\n"));
-
-    return 0;
+    // DEBUG_PRINT(("[DEBUG] cache_read end\n"));
+    return res;
 }
 
-static int cache_write(const char *data, size_t logic_lba)
+static int ftl_flush();
+static int cache_write(CacheEntry *new_entry)
 {
-
     DEBUG_PRINT(("[DEBUG] cache_write start\n"));
 
-    // TODO
-    /*** update linked list ***/
-    /*** update table ***/
-    /*** update log ***/
+    //
+    // CacheEntry *curr_node, *prev_node = NULL;
+    int num_cacheEntries = get_num_of_cache(ll_head_cache);
+
+    // If cache is not full, add a new entry to the end of the list
+    if (num_cacheEntries < CACHE_BUFFER_SIZE)
+    {
+        DEBUG_PRINT(("[DEBUG] cache_write, with adding a new entry to lba %u\n", new_entry->lba));
+
+        //
+        ll_head_cache = append_node_to_cache(ll_head_cache, new_entry);
+        print_cache(ll_head_cache);
+        DEBUG_PRINT(("[DEBUG] cache_write, cache_write success\n"));
+        return 1;
+    }
+
+    else
+    {
+        // if cache is full, flush the oldest entry (head of the list), add a new one to the end
+        DEBUG_PRINT(("[DEBUG] cache_write, with flush the oldest entry, and write lba %u\n", new_entry->lba));
+
+        // flush the first cache entry into nand, and update the ll_head_cache
+        CacheEntry *popped_node = ll_head_cache;
+        int rst = ftl_flush(popped_node);
+        if (rst == -EINVAL)
+            return -EINVAL;
+        ll_head_cache = ll_head_cache->next;
+        free(popped_node);
+
+        //
+        ll_head_cache = append_node_to_cache(ll_head_cache, new_entry);
+        print_cache(ll_head_cache);
+        DEBUG_PRINT(("[DEBUG] cache_write, cache_write success\n"));
+        return 1;
+    }
 
     DEBUG_PRINT(("[DEBUG] cache_write end\n"));
-
     return 0;
 }
 
-static int ftl_flush()
+static int ftl_gc();
+static int ftl_flush(CacheEntry *popped_node)
 {
-
     DEBUG_PRINT(("[DEBUG] ftl_flush start\n"));
 
-    // TODO
-    /*** update linked list ***/
-    /*** update table ***/
-    /*** update log ***/
+    // gc
+    ftl_gc();
+
+    // call nand_write to write the buffer to the NAND
+    if (popped_node->erasedSlot == 0)
+    {
+        //
+        unsigned int pca = get_next_pca();
+
+        // allocate space for spare buffer
+        char *spare_buf = calloc(PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE, sizeof(char));
+        memset(spare_buf, 0, PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE * sizeof(char));
+        unsigned char state = 1;
+        sprintf(spare_buf, "%c%c%c", state, popped_node->lba / 256, popped_node->lba % 256);
+        DEBUG_PRINT(("[DEBUG] ftl_flush write lba %ld to %u\n", popped_node->lba, pca));
+
+        PCA_RULE my_pca;
+        int rst = nand_write(popped_node->data, spare_buf, pca);
+        if (rst == -EINVAL)
+            return -EINVAL; // failed
+
+        // If nand_write complete successfully, then update the L2P table
+        unsigned int pre_pca = L2P[popped_node->lba];
+        if (pre_pca != INVALID_PCA)
+        {
+            // Noted that when the slot was not empty, we need to update the IVC (collect there has a invalid page in that block)
+            my_pca.pca = pre_pca;
+            IVC[my_pca.fields.block] += 1;
+        }
+        L2P[popped_node->lba] = pca;
+        if (erasedSlot[popped_node->lba] != 0)
+            flag_updateLog = 1;
+        erasedSlot[popped_node->lba] = 0;
+    }
+    else
+    {
+        // If erase is aligned, just erase from L2P is enough, and update the log
+        DEBUG_PRINT(("[DEBUG] ftl_flush, set erasedSlot[%3d] to 1\n", popped_node->lba));
+        unsigned int pca = L2P[popped_node->lba];
+        L2P[popped_node->lba] = INVALID_PCA;
+        PCA_RULE my_pca;
+        my_pca.pca = pca;
+        IVC[my_pca.fields.block] += 1;
+
+        if (erasedSlot[popped_node->lba] != 1)
+            flag_updateLog = 1;
+        erasedSlot[popped_node->lba] = 1;
+    }
+
+    //
+    ftl_write_log();
 
     DEBUG_PRINT(("[DEBUG] ftl_flush end\n"));
-
     return 0;
 }
 
 static int ftl_read(char *buf, size_t lba)
 {
-
     // get pca from L2P table
     unsigned int pca = L2P[lba];
-    // TODO uncomment for better understanding
     DEBUG_PRINT(("[DEBUG] ftl_read from LBA %ld -> PCA %u\n", lba, pca));
 
     // return 0 if that slot did not have any data there
@@ -784,6 +938,13 @@ static int ftl_write(const char *buf, size_t lba_range, size_t lba)
 {
 
     DEBUG_PRINT(("[DEBUG] ftl_write start\n"));
+
+    // //
+    // if (is_gc == 0)
+    // {
+    //     int rst = cache_write(buf, lba);
+    //     return rst;
+    // }
 
     // get pca via calling get_next_pca()
     unsigned int pca = get_next_pca();
@@ -999,8 +1160,14 @@ static int ssd_do_read(char *buf, size_t size, off_t offset)
 
     for (int i = 0; i < tmp_lba_range; i++)
     {
-        // use ftl_read to read data and error handling
-        rst = ftl_read(tmp_buf + i * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, tmp_lba + i);
+        // use cache_read & ftl_read to read data and error handling
+        // rst = cache_read(tmp_buf + i * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, tmp_lba + i);
+        int rst = 0;
+
+        CacheEntry *entry = cache_read(tmp_buf + i * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, tmp_lba + i);
+        if (entry == NULL)
+            rst = ftl_read(tmp_buf + i * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, tmp_lba + i);
+
         if (rst == 0)
         {
             // no data at the current lba
@@ -1038,10 +1205,16 @@ void ssd_do_flush()
     DEBUG_PRINT(("=====================================================\n"));
     DEBUG_PRINT(("[DEBUG] ssd_do_flush start\n"));
 
-    // TODO
-    /*** update linked list ***/
-    /*** update table ***/
-    /*** update log ***/
+    // TODO When flushing the whole cache, only flush the latest entry of the same lba
+    CacheEntry *curr_node = ll_head_cache;
+    while (curr_node != NULL)
+    {
+        ftl_flush(curr_node);
+        CacheEntry *tmp = curr_node;
+        curr_node = curr_node->next;
+        free(tmp);
+    }
+    ll_head_cache = NULL;
 
     DEBUG_PRINT(("[DEBUG] ssd_do_flush end\n"));
     DEBUG_PRINT(("=====================================================\n"));
@@ -1075,7 +1248,12 @@ static int ssd_do_write(const char *buf, size_t size, off_t offset)
         char *tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
         memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
 
-        int rst = ftl_read(tmp_buf, tmp_lba + idx);
+        // int rst = cache_read(tmp_buf, tmp_lba + idx);
+        int rst = 0;
+        CacheEntry *entry = cache_read(tmp_buf, tmp_lba + idx);
+        if (entry == NULL)
+            rst = ftl_read(tmp_buf, tmp_lba + idx);
+
         if (rst == -EINVAL)
             return -EINVAL;
 
@@ -1096,7 +1274,15 @@ static int ssd_do_write(const char *buf, size_t size, off_t offset)
         memcpy(tmp_buf + curr_offset, buf + process_size, curr_size);
         DEBUG_PRINT(("[DEBUG] ssd_do_write, fill from offset %d to %d\n", curr_offset, curr_offset + curr_size));
 
-        rst = ftl_write(tmp_buf, curr_size, tmp_lba + idx);
+        // rst = ftl_write(tmp_buf, curr_size, tmp_lba + idx);
+
+        CacheEntry *new_entry = malloc(sizeof(CacheEntry));
+        new_entry->lba = tmp_lba + idx;
+        new_entry->erasedSlot = 0;
+        memcpy(new_entry->data, tmp_buf, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+        new_entry->next = NULL;
+
+        rst = cache_write(new_entry);
         if (rst == -EINVAL)
             return -EINVAL;
         free(tmp_buf);
@@ -1137,7 +1323,15 @@ static int ftl_erase(const char *buf, int lba)
     {
         DEBUG_PRINT(("[DEBUG] ftl_erase, write the modified buffer to nand\n"));
         // ftl_write will already update IVC, don't collect two times
-        int rst = ftl_write(buf, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, lba);
+        // int rst = ftl_write(buf, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, lba);
+
+        CacheEntry *new_entry = malloc(sizeof(CacheEntry));
+        new_entry->lba = lba;
+        new_entry->erasedSlot = 0;
+        memcpy(new_entry->data, buf, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+        new_entry->next = NULL;
+
+        int rst = cache_write(new_entry);
         if (rst == -EINVAL)
             return -EINVAL;
     }
@@ -1146,16 +1340,26 @@ static int ftl_erase(const char *buf, int lba)
         // if erase is aligned, just erase from L2P is enough, and update the log
         DEBUG_PRINT(("[DEBUG] ftl_erase, set the erasedSlot %d to 1\n", lba));
 
+        //
+        CacheEntry *new_entry = malloc(sizeof(CacheEntry));
+        new_entry->lba = lba;
+        new_entry->erasedSlot = 1;
+        // memcpy(new_entry->data, data, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+        new_entry->next = NULL;
+
+        int rst = cache_write(new_entry);
+        return rst;
+
         /*** update linked list ***/
         /*** update table ***/
-        unsigned int pca = L2P[lba];
-        L2P[lba] = INVALID_PCA;
-        PCA_RULE my_pca;
-        my_pca.pca = pca;
-        IVC[my_pca.fields.block] += 1;
-        if (erasedSlot[lba] != 1)
-            flag_updateLog = 1;
-        erasedSlot[lba] = 1;
+        // unsigned int pca = L2P[lba];
+        // L2P[lba] = INVALID_PCA;
+        // PCA_RULE my_pca;
+        // my_pca.pca = pca;
+        // IVC[my_pca.fields.block] += 1;
+        // if (erasedSlot[lba] != 1)
+        //     flag_updateLog = 1;
+        // erasedSlot[lba] = 1;
 
         /*** update log ***/
     }
@@ -1196,55 +1400,40 @@ static int ssd_do_erase(int offset, int size)
         size_t lba = tmp_lba + idx;
 
         const char *tmp_buf = NULL;
-        curr_offset = 0;
-        if (idx == 0)
+        int prev_offset = offset + process_size;
+        curr_offset = prev_offset - (prev_offset / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE) * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
+        curr_size = (prev_offset / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + 1) * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE - prev_offset;
+        curr_size = curr_size > remain_size ? remain_size : curr_size;
+
+        // if L2P[lba] has no PCA, and we also can't find the lba on cache -> no data exists, no need to erase
+        tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
+        memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+
+        CacheEntry *entry = cache_read(tmp_buf, lba);
+        if ((entry != NULL && entry->erasedSlot == 1) || (entry == NULL && L2P[lba] == INVALID_PCA))
         {
-            curr_offset = offset - (offset / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE) * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
-            curr_size = (offset / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + 1) * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE - offset;
-            curr_size = curr_size > remain_size ? remain_size : curr_size;
-
-            if (L2P[lba] == INVALID_PCA)
-            {
-                process_size += curr_size;
-                remain_size -= curr_size;
-                curr_size = 0;
-                continue;
-            }
-
-            tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
-            rst = ftl_read(tmp_buf, lba);
-            if (rst == -EINVAL)
-                return -EINVAL;
-            memset(tmp_buf + curr_offset, 0, curr_size);
+            process_size += curr_size;
+            remain_size -= curr_size;
+            curr_size = 0;
+            free(tmp_buf);
+            tmp_buf = NULL;
+            continue;
         }
-        else if (idx == tmp_lba_range - 1)
+        else if (curr_size == PHYSICAL_DATA_SIZE_BYTES_PER_PAGE)
         {
-            curr_size = (remain_size);
-
-            if (L2P[lba] == INVALID_PCA)
-            {
-                process_size += curr_size;
-                remain_size -= curr_size;
-                curr_size = 0;
-                continue;
-            }
-
-            tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
-            rst = ftl_read(tmp_buf, lba);
-            if (rst == -EINVAL)
-                return -EINVAL;
-            memset(tmp_buf, 0, curr_size);
+            process_size += curr_size;
+            remain_size -= curr_size;
+            curr_size = 0;
+            free(tmp_buf);
+            tmp_buf = NULL;
         }
         else
         {
-            curr_size = PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
-            if (L2P[lba] == INVALID_PCA)
-            {
-                process_size += curr_size;
-                remain_size -= curr_size;
-                curr_size = 0;
-                continue;
-            }
+            if (entry == NULL)
+                rst = ftl_read(tmp_buf, lba);
+            if (rst == -EINVAL)
+                return -EINVAL;
+            memset(tmp_buf + curr_offset, 0, curr_size);
         }
 
         //
