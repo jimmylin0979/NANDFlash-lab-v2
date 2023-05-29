@@ -838,7 +838,7 @@ void ftl_do_copyback_helper(int block)
         }
         else
         {
-            DEBUG_PRINT(("ftl_do_copyback_helper, erased, replace lba %u to a copyback version, from old pca %d -> new pca %u\n", lba, pre_pca, pca));
+            DEBUG_PRINT(("ftl_do_copyback_helper, erased, replace lba %u to a copyback version, bad pca %u\n", lba, pca));
         }
     }
 
@@ -861,13 +861,19 @@ void ftl_do_copyback()
     int block_idx = -1;
     for (block_idx = 0; block_idx < PHYSICAL_NAND_NUM; block_idx++)
     {
-        if (SLC[block_idx] == 1)
+        if (SLC[block_idx] != 0)
         {
-            DEBUG_PRINT(("[DEBUG] ftl_do_copyback find slc block %d\n", block_idx));
-            if (slcBlock0 == -1)
+            if (SLC[block_idx] == 1)
+            {
+                DEBUG_PRINT(("[DEBUG] ftl_do_copyback find 1st slc block %d with SLC is %d\n", block_idx, SLC[block_idx]));
                 slcBlock0 = block_idx;
+            }
             else
+            {
+                DEBUG_PRINT(("[DEBUG] ftl_do_copyback find 2nd slc block %d with SLC is %d\n", block_idx, SLC[block_idx]));
                 slcBlock1 = block_idx;
+            }
+
             num_slcBlock++;
         }
     }
@@ -1156,7 +1162,7 @@ static int ftl_read(char *buf, size_t lba)
     unsigned int mode = MLC_mode;
     PCA_RULE my_pca;
     my_pca.pca = pca;
-    if (SLC[my_pca.fields.block] == 1)
+    if (SLC[my_pca.fields.block] != 0)
     {
         mode = SLC_mode;
         DEBUG_PRINT(("[DEBUG] ftl_read, read block %d in SLC mode\n", my_pca.fields.block));
@@ -1232,7 +1238,26 @@ static int ftl_write(const char *buf, size_t lba_range, size_t lba)
     erasedSlot[lba] = 0;
 
     my_pca.pca = pca;
-    SLC[my_pca.fields.block] = 1;
+
+    if (SLC[my_pca.fields.block] == 0)
+    {
+        // the first SLC[] of first SLC block should be 1, the second for 2
+        int idx = 0;
+        int is_exist_fst_slcBlock = 0;
+        for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
+        {
+            if (SLC[idx] == 1)
+            {
+                is_exist_fst_slcBlock = 1;
+                break;
+            }
+        }
+
+        if (is_exist_fst_slcBlock == 0)
+            SLC[my_pca.fields.block] = 1;
+        else
+            SLC[my_pca.fields.block] = 2;
+    }
 
     /*** update log ***/
 
