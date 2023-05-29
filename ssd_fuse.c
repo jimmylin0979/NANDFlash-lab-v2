@@ -354,7 +354,7 @@ void ftl_write_log()
     int num_slcBlock = 0;
     for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
     {
-        if (SLC[idx] == 1)
+        if (SLC[idx] != 0)
             num_slcBlock++;
     }
     sprintf(tmp_buf + log_size + 1, "%c", num_slcBlock % 256);
