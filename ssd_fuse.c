@@ -552,8 +552,8 @@ int ftl_restore(unsigned int *unusedBlock)
                 if (my_pca.pca != INVALID_PCA)
                 {
                     IVC[my_pca.fields.block] += 1;
-                    L2P[slot] = INVALID_PCA;
                 }
+                L2P[slot] = INVALID_PCA;
             }
             value = value / 2;
         }
@@ -856,18 +856,19 @@ void ftl_do_copyback_helper(int block)
 
         // deal with the case when erasedSlot[lba] = 1
         // when erasedSlot[lba] = 1, we should not need to replace the L2P
-        if (erasedSlot[lba] != 1)
+        unsigned int pre_pca = L2P[lba];
+        my_pca.pca = pre_pca;
+
+        if (pre_pca != INVALID_PCA && (my_pca.fields.block == block && my_pca.fields.page == page_idx))
         {
-            unsigned int pre_pca = L2P[lba];
             if (pre_pca != INVALID_PCA)
             {
                 // Noted that when the slot was not empty, we need to update the IVC (collect there has a invalid page in that block)
-                my_pca.pca = pre_pca;
                 IVC[my_pca.fields.block] += 1;
             }
             DEBUG_PRINT(("ftl_do_copyback_helper, replace lba %u to a copyback version, from old pca %d -> new pca %u\n", lba, pre_pca, pca));
             L2P[lba] = pca;
-            erasedSlot[lba] = 0;
+            // erasedSlot[lba] = 0;
         }
         else
         {

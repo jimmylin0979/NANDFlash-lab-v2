@@ -18,6 +18,9 @@
 #include "ssd_fuse_header.h"
 #include <time.h>
 
+int TEST_MAX_OFFSET = 409600;
+int TEST_MAX_SIZE = 20480;
+
 const char *usage =
     "Usage: ssd_fuse SSD_FILE COMMAND\n"
     "\n"
@@ -226,6 +229,60 @@ error:
     return 1;
 }
 
+int compare(char *path, int testCase_idx, char cmd, size_t offset, size_t size)
+{
+
+    //
+    ssd_command(path, 'r', 0, TEST_MAX_OFFSET);
+
+    int res = 0;
+    int bad_lba = -1;
+    int idx = 0;
+    for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
+    {
+        if (simulated_nand[idx] != tmp_buf[idx])
+        {
+            res = 1;
+            bad_lba = idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
+            printf("\033[0;31m");
+            printf("[FAIL] %02dth, mismatch at lba %d\n", testCase_idx, idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+            printf("\033[0m\n");
+            break;
+        }
+    }
+
+    //
+    if (res == 1)
+    {
+        printf("\033[0;31m");
+        printf("[FAIL] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
+        printf("\033[0m\n");
+
+        printf("Ground truth:\n");
+        for (idx = 0; idx < PHYSICAL_DATA_SIZE_BYTES_PER_PAGE; idx++)
+            printf("%c", simulated_nand[bad_lba * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + idx]);
+        printf("\n");
+
+        printf("Ours:\n");
+        for (idx = 0; idx < PHYSICAL_DATA_SIZE_BYTES_PER_PAGE; idx++)
+            printf("%c", tmp_buf[bad_lba * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + idx]);
+        printf("\n");
+        return 0;
+    }
+    else
+    {
+        printf("\033[0;32m");
+        printf("[PASS] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
+        printf("\033[0m\n");
+    }
+
+    //
+    free(tmp_buf);
+    tmp_buf = NULL;
+
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     // initial the while nand block
@@ -260,8 +317,12 @@ int main(int argc, char **argv)
     }
     path = argv[1];
 
-    int TEST_MAX_OFFSET = 409600;
-    int TEST_MAX_SIZE = 20480;
+    //
+    int rst = compare(path, -1, 'r', 0, TEST_MAX_OFFSET);
+    if (rst == 0)
+    {
+        exit(0);
+    }
 
     char cmd;
     int NUM_TESTCASE = atoi(argv[2]);
@@ -326,51 +387,9 @@ int main(int argc, char **argv)
         // compare the result
         if (1)
         {
-            ssd_command(path, 'r', 0, TEST_MAX_OFFSET);
-
-            int res = 0;
-            int bad_lba = -1;
-            for (idx = 0; idx < TEST_MAX_OFFSET; idx++)
-            {
-                if (simulated_nand[idx] != tmp_buf[idx])
-                {
-                    res = 1;
-                    bad_lba = idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE;
-                    printf("\033[0;31m");
-                    printf("[FAIL] %02dth, mismatch at lba %d\n", testCase_idx, idx / PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
-                    printf("\033[0m\n");
-                    break;
-                }
-            }
-
-            //
-            if (res == 1)
-            {
-                printf("\033[0;31m");
-                printf("[FAIL] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
-                printf("\033[0m\n");
-
-                printf("Ground truth:\n");
-                for (idx = 0; idx < PHYSICAL_DATA_SIZE_BYTES_PER_PAGE; idx++)
-                    printf("%c", simulated_nand[bad_lba * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + idx]);
-                printf("\n");
-
-                printf("Ours:\n");
-                for (idx = 0; idx < PHYSICAL_DATA_SIZE_BYTES_PER_PAGE; idx++)
-                    printf("%c", tmp_buf[bad_lba * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE + idx]);
-                printf("\n");
+            rst = compare(path, testCase_idx, cmd, offset, size);
+            if (rst == 0)
                 break;
-            }
-            else
-            {
-                printf("\033[0;32m");
-                printf("[PASS] %02dth, ssd %c with offset %lu and size %lu\n", testCase_idx, cmd, offset, size);
-                printf("\033[0m\n");
-            }
-
-            //
-            free(tmp_buf);
-            tmp_buf = NULL;
 
             // // write test log
             // FILE *fptr = fopen("test.log", "w");
