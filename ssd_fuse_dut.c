@@ -216,7 +216,23 @@ int main(int argc, char **argv)
         close(fd);
         printf("show L2P done\n");
         return 0;
+    case 'c':
+        printf("store log w/o cache\n");
+        fd = open(path, O_RDWR);
+        if (fd < 0)
+        {
+            perror("open");
+            return 1;
+        }
+        if (ioctl(fd, SSD_STORE_WOCACHE))
+        {
+            perror("ioctl");
+        }
+        close(fd);
+        printf("done\n");
+        return 0;
     }
+
 usage:
     fprintf(stderr, "%s", usage);
     return 1;

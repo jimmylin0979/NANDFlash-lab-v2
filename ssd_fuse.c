@@ -357,11 +357,13 @@ void ftl_write_log()
         if (SLC[idx] != 0)
             num_slcBlock++;
     }
-    sprintf(tmp_buf + log_size + 1, "%c", num_slcBlock % 256);
+    sprintf(tmp_buf + log_size, "%c", num_slcBlock % 256);
     log_size += 1;
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 4  save with num_slcBlock %d\n", num_slcBlock));
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, save with total log_size %d\n", log_size));
 
     /*** Write log ***/
-    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 4  call nand_write_log\n"));
+    DEBUG_PRINT(("[DEBUG] ftl_write_log, stage 5  call nand_write_log\n"));
     nand_write_log(tmp_buf, MAX_LOG_SIZE);
     free(tmp_buf);
 
@@ -391,7 +393,7 @@ int ftl_restore(unsigned int *unusedBlock)
     /*** Restore IVC, L2P ***/
     // restore number of SLC blocks
     int num_slcBlock = log_buf[212];
-    int num_blockWriteOrder = get_num_of_linkedList(ll_head_blockWriteOrder);
+    DEBUG_PRINT(("[DEBUG] ftl_restore, restore num_slcBlock %d\n", num_slcBlock));
 
     // we should first restore ll_blockWriteOrder, which will then be used to recover L2P, IVC table
     // log_buf[0: 51] stored the value the block order
@@ -408,12 +410,6 @@ int ftl_restore(unsigned int *unusedBlock)
         new_node->block = block;
         new_node->next = NULL;
 
-        if (idx >= num_blockWriteOrder - num_slcBlock)
-        {
-            DEBUG_PRINT(("[DEBUG] ftl_restore, restore block %ld in SLC\n", block));
-            SLC[block] = 1;
-        }
-
         if (prev_node == NULL)
         {
             ll_head_blockWriteOrder = new_node;
@@ -427,9 +423,39 @@ int ftl_restore(unsigned int *unusedBlock)
     }
     print_linkedList(ll_head_blockWriteOrder);
 
+    //
+    int num_blockWriteOrder = get_num_of_linkedList(ll_head_blockWriteOrder);
+    DEBUG_PRINT(("[DEBUG] ftl_restore, restore ll_blockWriteOrder, num_blockWriteOrder %d\n", num_blockWriteOrder));
+    Node *curr_node = NULL;
+    if (num_slcBlock != 0)
+    {
+        idx = 0;
+        curr_node = ll_head_blockWriteOrder;
+        int is_exist_fst_slcBlock = 0;
+        while (curr_node)
+        {
+            if (idx >= num_blockWriteOrder - num_slcBlock)
+            {
+                if (is_exist_fst_slcBlock == 0)
+                {
+                    DEBUG_PRINT(("[DEBUG] ftl_restore, restore block %ld in 1st SLC\n", curr_node->block));
+                    SLC[curr_node->block] = 1;
+                    is_exist_fst_slcBlock = 1;
+                }
+                else
+                {
+                    DEBUG_PRINT(("[DEBUG] ftl_restore, restore block %ld in 2nd SLC\n", curr_node->block));
+                    SLC[curr_node->block] = 2;
+                }
+            }
+            curr_node = curr_node->next;
+            idx++;
+        }
+    }
+
     // next, we read the spare data from nand, and recover it to L2P in the order described by ll_blockOrder
     //  at the same time, we can recover IVC table by checking whether L2P slot is overwritten
-    Node *curr_node = ll_head_blockWriteOrder;
+    curr_node = ll_head_blockWriteOrder;
     int *prev_block = (int *)malloc(sizeof(int) * LBA_NUM);
     memset(prev_block, -1, sizeof(int) * LBA_NUM);
     while (curr_node)
@@ -443,7 +469,7 @@ int ftl_restore(unsigned int *unusedBlock)
             my_pca.fields.block = curr_node->block;
             my_pca.fields.page = page;
 
-            if (SLC[curr_node->block] == 1 && my_pca.fields.page >= LBA_NUM_PER_BLOCK / 2)
+            if (SLC[curr_node->block] != 0 && my_pca.fields.page >= LBA_NUM_PER_BLOCK / 2)
             {
                 break;
             }
@@ -522,8 +548,12 @@ int ftl_restore(unsigned int *unusedBlock)
                 // erasedSlot is 1, set the L2P[slot] to INVALID_PCA, and IVC[slot] increase by 1
                 PCA_RULE my_pca;
                 my_pca.pca = L2P[slot];
-                IVC[my_pca.fields.block] += 1;
-                L2P[slot] = INVALID_PCA;
+                // DEBUG_PRINT(("[DEBUG] ftl_restore, reset L2P [%2d] = pca %u to INVALID_PCA\n", slot, my_pca.pca));
+                if (my_pca.pca != INVALID_PCA)
+                {
+                    IVC[my_pca.fields.block] += 1;
+                    L2P[slot] = INVALID_PCA;
+                }
             }
             value = value / 2;
         }
@@ -658,25 +688,26 @@ size_t spare_read(unsigned int pca)
     // Allocate space for spare buffer
     char *buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
     unsigned char *spare_buf = calloc(PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE, sizeof(char));
+    memset(spare_buf, 0, PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE * sizeof(char));
 
     // Call nand_read and store value inside the buffers (spare_buf)
     unsigned int mode = MLC_mode;
     PCA_RULE my_pca;
     my_pca.pca = pca;
-    if (SLC[my_pca.fields.block] == 1)
+    if (SLC[my_pca.fields.block] != 0)
     {
         mode = SLC_mode;
-        DEBUG_PRINT(("[DEBUG] spare_read, read block %ld in SLC mode\n", my_pca.fields.block));
+        DEBUG_PRINT(("[DEBUG] spare_read, read block %ld page %ld in SLC mode\n", my_pca.fields.block, my_pca.fields.page));
     }
 
     int rst = nand_read(buf, spare_buf, pca, mode);
     if (rst == -EINVAL)
-    {
         return -EINVAL;
-    }
 
     // Handle when the block is not written full
-    size_t is_exist_spare_data = spare_buf[0];
+    size_t is_exist_spare_data = (unsigned char)spare_buf[3];
+    DEBUG_PRINT(("[DEBUG] spare_buf[3] is %d\n", spare_buf[3]));
+    DEBUG_PRINT(("[DEBUG] spare_read, page state is %u\n", is_exist_spare_data));
     if (is_exist_spare_data != 1)
     {
         // return LBA_NUM when the spare data is not exist
@@ -806,6 +837,7 @@ void ftl_do_copyback_helper(int block)
         // Call nand_read and store value inside the buffers (spare_bug & buf)
         char *tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
         char *tmp_spare_buf = calloc(PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE, sizeof(char));
+        memset(tmp_spare_buf, 0, PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE * sizeof(char));
         int rst = nand_read(tmp_buf, tmp_spare_buf, my_pca.pca, SLC_mode);
         if (rst == -EINVAL)
             return -EINVAL;
@@ -813,7 +845,8 @@ void ftl_do_copyback_helper(int block)
         // write to a mlc block
         unsigned int pca = get_next_pca();
         size_t lba = (unsigned char)tmp_spare_buf[1] * 256 + (unsigned char)tmp_spare_buf[2];
-        tmp_spare_buf[0] = MLC_mode & 1;
+        tmp_spare_buf[0] = MLC_mode;
+        tmp_spare_buf[3] = 1;
         rst = nand_write(tmp_buf, tmp_spare_buf, pca, MLC_mode);
         if (rst == -EINVAL)
             return -EINVAL;
@@ -1169,6 +1202,7 @@ static int ftl_read(char *buf, size_t lba)
     }
 
     int rst = nand_read(buf, spare_buf, pca, mode);
+    free(spare_buf);
 
     /*** update linked list ***/
     /*** update table ***/
@@ -1213,14 +1247,16 @@ static int ftl_write(const char *buf, size_t lba_range, size_t lba)
     char *spare_buf = calloc(PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE, sizeof(char));
     memset(spare_buf, 0, PHYSICAL_SPARE_SIZE_BYTES_PER_PAGE * sizeof(char));
     unsigned char state = 1;
-    sprintf(spare_buf, "%c%c%c", state, lba / 256, lba % 256);
+    sprintf(spare_buf, "%c%c%c%c", 0, lba / 256, lba % 256, state);
     // sprintf(spare_buf, 3, "%c%c%c", state, lba / 256, lba % 256);
+    DEBUG_PRINT(("[DEBUG] ftl_write, spare_buf[0] is %d\n", spare_buf[3]));
 
     // call nand_write to write the buffer to the NAND
     int rst = nand_write(buf, spare_buf, pca, SLC_mode);
     if (rst == -EINVAL)
         return -EINVAL;
     DEBUG_PRINT(("[DEBUG] ftl_write, nand_write success\n"));
+    free(spare_buf);
 
     /*** update linked list ***/
     /*** update table ***/
@@ -1527,7 +1563,7 @@ static int ssd_do_write(const char *buf, size_t size, off_t offset)
 
         // tmp_buf is the current 512B write-in value
         char *tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
-        memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+        memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE * sizeof(char));
 
         // int rst = cache_read(tmp_buf, tmp_lba + idx);
         int rst = 0;
@@ -1688,7 +1724,7 @@ static int ssd_do_erase(int offset, int size)
 
         // if L2P[lba] has no PCA, and we also can't find the lba on cache -> no data exists, no need to erase
         tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
-        memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+        memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE * sizeof(char));
 
         CacheEntry *entry = cache_read(tmp_buf, lba);
         // TODO Can we decrease WAF by ignoring useless command ?
@@ -1715,7 +1751,7 @@ static int ssd_do_erase(int offset, int size)
                 rst = ftl_read(tmp_buf, lba);
             if (rst == -EINVAL)
                 return -EINVAL;
-            memset(tmp_buf + curr_offset, 0, curr_size);
+            memset(tmp_buf + curr_offset, 0, curr_size * sizeof(char));
         }
 
         //
@@ -1765,7 +1801,39 @@ static int ssd_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
     return 0;
 }
 
-static int ssd_ioctl(const char *path, unsigned int cmd, void *arg, struct fuse_file_info *fi, unsigned int flags, void *data)
+int ftl_store_woCache()
+{
+    int idx = 0;
+    int rst = 0;
+    char *content_on_nand = malloc(LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 * sizeof(char));
+    for (idx = 0; idx < LBA_NUM; idx++)
+    {
+        //
+        char *tmp_buf = calloc(PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, sizeof(char));
+        memset(tmp_buf, 0, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE * sizeof(char));
+        rst = ftl_read(tmp_buf, idx);
+        if (rst == -EINVAL)
+            return -EINVAL;
+
+        //
+        memcpy(content_on_nand + idx * PHYSICAL_DATA_SIZE_BYTES_PER_PAGE, tmp_buf, PHYSICAL_DATA_SIZE_BYTES_PER_PAGE);
+        free(tmp_buf);
+    }
+
+    FILE *fptr = fopen(TEST_CACHE_LOG_LOCATION, "w");
+    for (idx = 0; idx < LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024; idx++)
+    {
+        fprintf(fptr, "%c", content_on_nand[idx]);
+        printf("%c", content_on_nand[idx]);
+    }
+    printf("\n");
+    fclose(fptr);
+    free(content_on_nand);
+    return 0;
+}
+
+static int
+ssd_ioctl(const char *path, unsigned int cmd, void *arg, struct fuse_file_info *fi, unsigned int flags, void *data)
 {
 
     if (ssd_file_type(path) != SSD_FILE)
@@ -1812,6 +1880,9 @@ static int ssd_ioctl(const char *path, unsigned int cmd, void *arg, struct fuse_
         }
         return 0;
     }
+    case SSD_STORE_WOCACHE:
+        ftl_store_woCache();
+        return 0;
     }
     return -EINVAL;
 }

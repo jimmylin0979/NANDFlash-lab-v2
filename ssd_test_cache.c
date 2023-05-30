@@ -191,6 +191,36 @@ int ssd_command(char *path, char cmd, size_t offset, size_t size)
         printf("erase start %lu, erase size %lu\n", param[0], param[1]);
         close(fd);
         return 0;
+    case 'f':
+        printf("do flush\n");
+        fd = open(path, O_RDWR);
+        if (fd < 0)
+        {
+            perror("open");
+            return 1;
+        }
+        if (ioctl(fd, SSD_FLUSH))
+        {
+            perror("ioctl");
+        }
+        close(fd);
+        printf("flush done\n");
+        return 0;
+    case 'c':
+        printf("store log w/o cache\n");
+        fd = open(path, O_RDWR);
+        if (fd < 0)
+        {
+            perror("open");
+            return 1;
+        }
+        if (ioctl(fd, SSD_STORE_WOCACHE))
+        {
+            perror("ioctl");
+        }
+        close(fd);
+        printf("done\n");
+        return 0;
     }
 error:
     return 1;
@@ -203,7 +233,7 @@ int main(int argc, char **argv)
     memset(simulated_nand, 0, sizeof(char) * LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024);
 
     // read log
-    FILE *fptr = fopen("test.log", "r");
+    FILE *fptr = fopen(TEST_CACHE_LOG_LOCATION, "r");
     int testCase_idx = 0, idx = 0;
     int c;
     if (fptr != NULL)
@@ -230,14 +260,15 @@ int main(int argc, char **argv)
     }
     path = argv[1];
 
+    int TEST_MAX_OFFSET = 409600;
+    int TEST_MAX_SIZE = 20480;
+
     char cmd;
     int NUM_TESTCASE = atoi(argv[2]);
     printf("NUM_TESTCASE : %d\n", NUM_TESTCASE);
     for (testCase_idx = 0; testCase_idx < NUM_TESTCASE; testCase_idx++)
     {
         // random ssd w, e
-        int TEST_MAX_OFFSET = 409600;
-        int TEST_MAX_SIZE = 20480;
         size_t offset = rand() % TEST_MAX_OFFSET; // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024);
         size_t size = rand() % TEST_MAX_SIZE + 1; // (LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024) + 1;
 
@@ -341,13 +372,16 @@ int main(int argc, char **argv)
             free(tmp_buf);
             tmp_buf = NULL;
 
-            // write test log
-            FILE *fptr = fopen("test.log", "w");
-            for (idx = 0; idx < LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024; idx++)
-            {
-                fprintf(fptr, "%c", simulated_nand[idx]);
-            }
-            fclose(fptr);
+            // // write test log
+            // FILE *fptr = fopen("test.log", "w");
+            // for (idx = 0; idx < LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024; idx++)
+            // {
+            //     fprintf(fptr, "%c", simulated_nand[idx]);
+            // }
+            // fclose(fptr);
         }
     }
+
+    //
+    ssd_command(path, 'c', 0, TEST_MAX_OFFSET);
 }

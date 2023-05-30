@@ -31,6 +31,8 @@
 #define NAND_LOCATION "/home/jimmylin0979/Desktop/NANDFlash-lab/NANDs"
 #define LOG_LOCATION "/home/jimmylin0979/Desktop/NANDFlash-lab/log"
 // #define OUTPUT_LOCATION "/home/jimmylin0979/Desktop/NANDFlash-lab/testCase/output"
+#define TEST_LOG_LOCATION "/home/jimmylin0979/Desktop/NANDFlash-lab/test.log"
+#define TEST_CACHE_LOG_LOCATION "/home/jimmylin0979/Desktop/NANDFlash-lab/test_cache.log"
 
 enum
 {
@@ -40,4 +42,5 @@ enum
   SSD_LOGIC_ERASE     = _IOW('E', 3, size_t),
   SSD_FLUSH           = _IO('E', 4),
   SSD_SHOW_L2P        = _IO('E', 5),
+  SSD_STORE_WOCACHE   = _IO('E', 6),
 };

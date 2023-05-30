@@ -1,4 +1,4 @@
 gcc -Wall ssd_fuse.c `pkg-config fuse3 --cflags --libs` -D_FILE_OFFSET_BITS=64 -o ssd_fuse
 gcc -Wall ssd_fuse_dut.c -o ssd_fuse_dut
 gcc -Wall ssd_test.c -o ssd_test
-gcc -Wall ssd_test_tiny.c -o ssd_test_tiny
+gcc -Wall ssd_test_cache.c -o ssd_test_cache

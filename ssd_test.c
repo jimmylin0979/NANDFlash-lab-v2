@@ -203,7 +203,7 @@ int main(int argc, char **argv)
     memset(simulated_nand, 0, sizeof(char) * LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024);
 
     // read log
-    FILE *fptr = fopen("test.log", "r");
+    FILE *fptr = fopen(TEST_LOG_LOCATION, "r");
     int testCase_idx = 0, idx = 0;
     int c;
     if (fptr != NULL)
@@ -339,7 +339,7 @@ int main(int argc, char **argv)
             tmp_buf = NULL;
 
             // write test log
-            FILE *fptr = fopen("test.log", "w");
+            FILE *fptr = fopen(TEST_LOG_LOCATION, "w");
             for (idx = 0; idx < LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024; idx++)
             {
                 fprintf(fptr, "%c", simulated_nand[idx]);
