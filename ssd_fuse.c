@@ -1100,6 +1100,7 @@ static int cache_write(CacheEntry *new_entry)
 
     //
     // CacheEntry *curr_node, *prev_node = NULL;
+    // TODO cache should overwrite the slot with the same lba
     int num_cacheEntries = get_num_of_cache(ll_head_cache);
 
     // If cache is not full, add a new entry to the end of the list
